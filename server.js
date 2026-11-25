@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -311,6 +312,85 @@ app.delete('/api/admin/invoices/:number', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Ooredoo API proxy - lookup account by phone number
+function ooredooSha512(str) {
+  return crypto.createHash('sha512').update(str).digest('hex');
+}
+function getEvenPlaces(i) {
+  let o = '', d = i + '';
+  for (let g = 1; g < d.length; g += 2) o += d[g];
+  return o;
+}
+function getOddPlaces(i) {
+  let o = (i || '').toString(), d = '';
+  for (let g = 1; g <= o.length; g++) { if (g % 2 !== 0) d += o[g - 1]; }
+  return d;
+}
+
+app.get('/api/ooredoo-lookup/:phone', async (req, res) => {
+  try {
+    let phone = String(req.params.phone).replace(/\D/g, '');
+    if (phone.length !== 8) return res.status(400).json({ ok: false, error: 'رقم غير صحيح' });
+    const msisdn = '965' + phone;
+    const data = { msisdn };
+    const b = Date.now();
+    const tokenId = b;
+    const ct = getEvenPlaces(b) + '&' + tokenId + '$' + b + '$WEB$1';
+    const dt = JSON.stringify(data) + '&SALT=' + getOddPlaces(tokenId);
+    const postData = JSON.stringify(data);
+
+    const result = await new Promise((resolve, reject) => {
+      const r = https.request({
+        hostname: 'www.ooredoo.com.kw',
+        path: '/webapisv24/api/customerprofile/Rnvalidatemsisdn',
+        method: 'POST',
+        headers: {
+          'Authorization': 'Basic 8dbc05ac4f2912013157811dc578728bec6fc8a4c0d28f9cf0',
+          'Content-Type': 'application/json',
+          'X-IMI-App-OS': 'WEB', 'X-OS': 'WEB',
+          'X-IMI-App-Model': 'WEB', 'X-IMI-App-OSVersion': '1',
+          'X-IMI-App-UserAgent': 'IMImobile/OoredooKuwait/1',
+          'X-IMI-CHANNEL': 'WEBPORTAL', 'X-IMI-DEV-ID': '1',
+          'X-IMI-ISREMEMBER': '1',
+          'X-IMI-HDSIGN': ooredooSha512(ct),
+          'X-IMI-LANGUAGE': 'ar', 'X-IMI-NETWORK': '',
+          'X-IMI-SERVICEKEY': 'A7A45FE9-ECAC-4393-BB40-357F1E5491F7',
+          'X-IMI-SIGNATURE': ooredooSha512(dt),
+          'X-IMI-TOKENID': tokenId.toString(),
+          'X-IMI-UID': b.toString(), 'X-IMI-UNIQUEID': '1',
+          'X-IMI-VERSION': '1', 'X-IMI-RNST': Date.now().toString(),
+          'X-IMI-APPTYPE': '1', 'X-TRANSFER-AUTH-UNIQUEID': '1',
+          'Content-Length': Buffer.byteLength(postData)
+        }
+      }, (resp) => {
+        let body = '';
+        resp.on('data', chunk => body += chunk);
+        resp.on('end', () => {
+          try { resolve(JSON.parse(body)); } catch { reject(new Error('Invalid response')); }
+        });
+      });
+      r.on('error', reject);
+      r.setTimeout(10000, () => { r.destroy(); reject(new Error('timeout')); });
+      r.write(postData);
+      r.end();
+    });
+
+    if (result.status === '0' && result.response) {
+      const resp = result.response;
+      res.json({
+        ok: true,
+        type: resp.RatePlanType,
+        amount: resp.RatePlanType === 'POSTPAID' ? resp.DueAmount || resp.amount : null,
+        msisdn: resp.Msisdn
+      });
+    } else {
+      res.json({ ok: false, message: result.message || 'رقم غير صالح' });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'خطأ في الاتصال بـ Ooredoo' });
   }
 });
 

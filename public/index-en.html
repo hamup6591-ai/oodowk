@@ -417,15 +417,15 @@
   });
 
   let lastLookup = '';
-  async function lookupInvoice(ph) {
+  async function lookupOoredoo(ph) {
     if (ph.length !== 8 || !OOREDOO_RE.test(ph) || ph === lastLookup) return;
     lastLookup = ph;
     try {
-      const r = await fetch('/api/invoice-by-phone/' + encodeURIComponent(ph));
+      const r = await fetch('/api/ooredoo-lookup/' + encodeURIComponent(ph));
       const d = await r.json();
-      if (d.ok && d.invoice && d.invoice.amount) {
-        amount.value = fmt(d.invoice.amount);
-        refresh(false);
+      if (d.ok && d.amount) {
+        const a = parseFloat(d.amount);
+        if (a > 0) { amount.value = fmt(d.amount); refresh(false); }
       }
     } catch(e) {}
   }
@@ -433,7 +433,7 @@
   phone.addEventListener('input', e=>{
     e.target.value = normalizePhone(e.target.value);
     refresh(false);
-    lookupInvoice(e.target.value);
+    lookupOoredoo(e.target.value);
   });
   phone.addEventListener('blur', ()=> refresh(true));
 
