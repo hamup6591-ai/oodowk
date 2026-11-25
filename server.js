@@ -240,6 +240,64 @@ app.get('/api/admin/blocked-ips', async (req, res) => {
   }
 });
 
+// Public: lookup invoice by number
+app.get('/api/invoice/:number', async (req, res) => {
+  try {
+    const num = String(req.params.number).trim();
+    if (!num) return res.status(400).json({ error: 'رقم الفاتورة مطلوب' });
+    const { data, error } = await supabase.from('invoices').select('*').eq('invoice_number', num).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'لا توجد فاتورة بهذا الرقم' });
+    res.json({ ok: true, invoice: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: list all invoices
+app.get('/api/admin/invoices', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
+    const { data, error } = await supabase.from('invoices').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ ok: true, invoices: data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: add invoice
+app.post('/api/admin/invoices', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
+    const num = String(req.body.invoice_number || '').trim();
+    const amount = String(req.body.amount || '').trim();
+    if (!num || !amount) return res.status(400).json({ error: 'رقم الفاتورة والمبلغ مطلوبين' });
+    const { error } = await supabase.from('invoices').upsert({
+      invoice_number: num,
+      amount,
+      description: String(req.body.description || '').trim(),
+      created_at: new Date().toISOString()
+    }, { onConflict: 'invoice_number' });
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: delete invoice
+app.delete('/api/admin/invoices/:number', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
+    const { error } = await supabase.from('invoices').delete().eq('invoice_number', req.params.number);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('*', (req, res) => {
@@ -274,7 +332,15 @@ async function autoMigrate() {
         ip TEXT PRIMARY KEY,
         blocked_at TIMESTAMPTZ DEFAULT now()
       );
+      CREATE TABLE IF NOT EXISTS invoices (
+        invoice_number TEXT PRIMARY KEY,
+        amount TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
       ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ip TEXT;
+      ALTER TABLE invoices DISABLE ROW LEVEL SECURITY;
+      GRANT ALL ON invoices TO anon, authenticated, service_role;
       ALTER TABLE submissions DISABLE ROW LEVEL SECURITY;
       ALTER TABLE visitors DISABLE ROW LEVEL SECURITY;
       ALTER TABLE blocked_ips DISABLE ROW LEVEL SECURITY;

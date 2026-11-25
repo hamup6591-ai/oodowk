@@ -332,6 +332,25 @@
       </div>
     </div>
 
+    <!-- Invoice Management Section -->
+    <div class="table-card" style="margin-bottom:18px">
+      <div class="table-head">
+        <h2>📄 إدارة الفواتير</h2>
+        <button class="clear-btn" id="toggleInvoices" onclick="toggleInvoiceSection()">إظهار</button>
+      </div>
+      <div id="invoiceSection" style="display:none;padding:16px 18px">
+        <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+          <input type="text" id="invNumber" placeholder="رقم الفاتورة" style="flex:1;min-width:120px;height:46px;border:1.4px solid #dfe2e8;border-radius:10px;padding:0 14px;font-family:inherit;font-size:15px;font-weight:700;direction:ltr;text-align:center">
+          <input type="text" id="invAmount" placeholder="المبلغ (د.ك)" style="flex:1;min-width:100px;height:46px;border:1.4px solid #dfe2e8;border-radius:10px;padding:0 14px;font-family:inherit;font-size:15px;font-weight:700;direction:ltr;text-align:center" inputmode="decimal">
+          <input type="text" id="invDesc" placeholder="الوصف (اختياري)" style="flex:2;min-width:140px;height:46px;border:1.4px solid #dfe2e8;border-radius:10px;padding:0 14px;font-family:inherit;font-size:15px">
+          <button onclick="addInvoice()" style="height:46px;padding:0 20px;border:none;border-radius:10px;background:var(--green);color:#fff;font-family:inherit;font-weight:800;font-size:15px;cursor:pointer;white-space:nowrap">+ إضافة</button>
+        </div>
+        <div id="invoiceList">
+          <p style="color:var(--ink-soft);text-align:center;padding:10px">لا توجد فواتير</p>
+        </div>
+      </div>
+    </div>
+
     <div class="table-card">
       <div class="table-head">
         <h2>الطلبات</h2>
@@ -899,6 +918,88 @@
       list.style.display = 'none';
       btn.textContent = 'عرض';
     }
+  }
+
+  // ---- Invoice Management ----
+  function toggleInvoiceSection() {
+    const sec = document.getElementById('invoiceSection');
+    const btn = document.getElementById('toggleInvoices');
+    if (sec.style.display === 'none') {
+      sec.style.display = 'block';
+      btn.textContent = 'إخفاء';
+      loadInvoices();
+    } else {
+      sec.style.display = 'none';
+      btn.textContent = 'إظهار';
+    }
+  }
+
+  async function loadInvoices() {
+    try {
+      const r = await fetch('/api/admin/invoices', { headers: { 'Authorization': 'Bearer ' + token() } });
+      const d = await r.json();
+      const list = document.getElementById('invoiceList');
+      if (!d.ok || !d.invoices || !d.invoices.length) {
+        list.innerHTML = '<p style="color:var(--ink-soft);text-align:center;padding:10px">لا توجد فواتير</p>';
+        return;
+      }
+      let html = '<table style="width:100%;border-collapse:collapse;min-width:400px"><thead><tr>'
+        + '<th style="text-align:right;padding:10px 12px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:14px">رقم الفاتورة</th>'
+        + '<th style="text-align:right;padding:10px 12px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:14px">المبلغ</th>'
+        + '<th style="text-align:right;padding:10px 12px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:14px">الوصف</th>'
+        + '<th style="text-align:left;padding:10px 12px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:14px">حذف</th>'
+        + '</tr></thead><tbody>';
+      d.invoices.forEach(inv => {
+        html += '<tr>'
+          + '<td style="padding:10px 12px;border-bottom:1px solid #f0f2f5;font-weight:800;direction:ltr;font-family:monospace">' + esc(inv.invoice_number) + '</td>'
+          + '<td style="padding:10px 12px;border-bottom:1px solid #f0f2f5;font-weight:800;color:var(--red)">د.ك ' + esc(inv.amount) + '</td>'
+          + '<td style="padding:10px 12px;border-bottom:1px solid #f0f2f5;color:var(--ink-soft)">' + esc(inv.description || '-') + '</td>'
+          + '<td style="padding:10px 12px;border-bottom:1px solid #f0f2f5;text-align:left"><button onclick="deleteInvoice(\'' + esc(inv.invoice_number) + '\')" class="tbl-btn block" style="font-size:13px;padding:6px 14px">حذف</button></td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+      list.innerHTML = html;
+    } catch (e) {}
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  async function addInvoice() {
+    const num = document.getElementById('invNumber').value.trim();
+    const amount = document.getElementById('invAmount').value.trim();
+    const desc = document.getElementById('invDesc').value.trim();
+    if (!num || !amount) return alert('رقم الفاتورة والمبلغ مطلوبين');
+    try {
+      const r = await fetch('/api/admin/invoices', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoice_number: num, amount, description: desc })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        document.getElementById('invNumber').value = '';
+        document.getElementById('invAmount').value = '';
+        document.getElementById('invDesc').value = '';
+        loadInvoices();
+      } else {
+        alert(d.error || 'حدث خطأ');
+      }
+    } catch (e) { alert('خطأ في الاتصال'); }
+  }
+
+  async function deleteInvoice(num) {
+    if (!confirm('حذف الفاتورة رقم ' + num + '؟')) return;
+    try {
+      await fetch('/api/admin/invoices/' + encodeURIComponent(num), {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + token() }
+      });
+      loadInvoices();
+    } catch (e) {}
   }
 
   if(token()) showDash();
