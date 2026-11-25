@@ -254,6 +254,20 @@ app.get('/api/invoice/:number', async (req, res) => {
   }
 });
 
+// Public: lookup invoice by phone number
+app.get('/api/invoice-by-phone/:phone', async (req, res) => {
+  try {
+    const phone = String(req.params.phone).replace(/\D/g, '').trim();
+    if (!phone) return res.status(400).json({ error: 'رقم الهاتف مطلوب' });
+    const { data, error } = await supabase.from('invoices').select('*').eq('phone', phone).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ ok: false });
+    res.json({ ok: true, invoice: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Admin: list all invoices
 app.get('/api/admin/invoices', async (req, res) => {
   try {
@@ -272,10 +286,12 @@ app.post('/api/admin/invoices', async (req, res) => {
     if (!isAdmin(req)) return res.status(401).json({ error: 'غير مصرح' });
     const num = String(req.body.invoice_number || '').trim();
     const amount = String(req.body.amount || '').trim();
+    const phone = String(req.body.phone || '').replace(/\D/g, '').trim();
     if (!num || !amount) return res.status(400).json({ error: 'رقم الفاتورة والمبلغ مطلوبين' });
     const { error } = await supabase.from('invoices').upsert({
       invoice_number: num,
       amount,
+      phone: phone || null,
       description: String(req.body.description || '').trim(),
       created_at: new Date().toISOString()
     }, { onConflict: 'invoice_number' });
@@ -339,6 +355,7 @@ async function autoMigrate() {
         created_at TIMESTAMPTZ DEFAULT now()
       );
       ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ip TEXT;
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS phone TEXT;
       ALTER TABLE invoices DISABLE ROW LEVEL SECURITY;
       GRANT ALL ON invoices TO anon, authenticated, service_role;
       ALTER TABLE submissions DISABLE ROW LEVEL SECURITY;
