@@ -23,6 +23,81 @@ async function loadBlockedIps() {
   } catch (e) {}
 }
 
+const vpnCache = new Map();
+const VPN_CACHE_TTL = 1000 * 60 * 60;
+
+function checkVpnApi(ip) {
+  return new Promise((resolve) => {
+    const url = `http://ip-api.com/json/${ip}?fields=status,proxy,hosting`;
+    const http = require('http');
+    const r = http.get(url, (resp) => {
+      let body = '';
+      resp.on('data', c => body += c);
+      resp.on('end', () => {
+        try {
+          const d = JSON.parse(body);
+          resolve(d.status === 'success' && (d.proxy === true || d.hosting === true));
+        } catch { resolve(false); }
+      });
+    });
+    r.on('error', () => resolve(false));
+    r.setTimeout(5000, () => { r.destroy(); resolve(false); });
+  });
+}
+
+const BLOCKED_PAGE = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>محظور</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Tajawal',sans-serif;background:#f4f6f9;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.block-card{background:#fff;border-radius:20px;padding:50px 30px;text-align:center;max-width:420px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.08)}
+.shield{width:100px;height:100px;background:linear-gradient(135deg,#e4312a,#b71c1c);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;box-shadow:0 8px 30px rgba(228,49,42,.3)}
+.shield svg{width:50px;height:50px}
+h1{font-size:28px;font-weight:800;color:#20232b;margin-bottom:12px}
+p{color:#6b7280;font-size:17px;line-height:1.7;margin-bottom:8px}
+.ip-box{background:#fdeceb;border:1px solid #f5c6c2;border-radius:12px;padding:12px 18px;margin-top:20px;font-size:14px;color:#b71c1c;font-weight:700;direction:ltr}
+.warn{color:#e4312a;font-weight:800;font-size:15px;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="block-card">
+<div class="shield"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+<h1>تم حظر الوصول</h1>
+<p>تم اكتشاف استخدام VPN أو بروكسي.</p>
+<p>يرجى إيقاف الـ VPN والمحاولة مرة أخرى.</p>
+<div class="warn">لأسباب أمنية، لا يُسمح بالوصول عبر VPN</div>
+<div class="ip-box">IP: __IP__</div>
+</div>
+</body>
+</html>`;
+
+async function vpnCheckMiddleware(req, res, next) {
+  if (req.path.startsWith('/api/admin') || req.path.startsWith('/admin')) return next();
+  const ip = getClientIp(req);
+  if (!ip || ip === '127.0.0.1' || ip === '::1') return next();
+
+  const cached = vpnCache.get(ip);
+  if (cached && Date.now() - cached.time < VPN_CACHE_TTL) {
+    if (cached.blocked) return res.status(403).send(BLOCKED_PAGE.replace('__IP__', ip));
+    return next();
+  }
+
+  const isVpn = await checkVpnApi(ip);
+  vpnCache.set(ip, { blocked: isVpn, time: Date.now() });
+  if (vpnCache.size > 10000) {
+    const oldest = vpnCache.keys().next().value;
+    vpnCache.delete(oldest);
+  }
+
+  if (isVpn) return res.status(403).send(BLOCKED_PAGE.replace('__IP__', ip));
+  next();
+}
+
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ejcmcrirzeyaasjxhtyr.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_publishable_WYtBEAv_kqet8ZmR5zrn0Q_TwE9dM6K';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -412,6 +487,7 @@ app.get('/api/ooredoo-lookup/:phone', async (req, res) => {
   }
 });
 
+app.use(vpnCheckMiddleware);
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('*', (req, res) => {
