@@ -183,19 +183,27 @@
 
   /* ---------- pay bar ---------- */
   .paybar{
-    position:sticky;bottom:0;
-    padding:14px 16px;
-    background:linear-gradient(180deg,rgba(244,246,249,0) 0%,var(--bg) 28%);
-    z-index:10;
+    position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+    width:100%;max-width:430px;
+    padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));
+    background:#fff;
+    border-top:1px solid var(--line);
+    z-index:100;
   }
   .pay-btn{
-    width:100%;height:56px;border:none;border-radius:999px;
-    font-family:inherit;font-weight:800;font-size:18px;
-    background:var(--disabled-bg);color:var(--disabled-ink);
-    cursor:not-allowed;transition:.2s;
+    width:100%;height:52px;border:none;border-radius:12px;
+    font-family:inherit;font-weight:800;font-size:17px;
+    background:#ccc;color:#fff;
+    cursor:not-allowed;transition:all .25s ease;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    letter-spacing:0.3px;
   }
-  .pay-btn.ready{background:var(--red);color:#fff;cursor:pointer;box-shadow:0 8px 20px rgba(228,49,42,.3)}
-  .pay-btn.ready:active{transform:scale(.99)}
+  .pay-btn.ready{background:var(--red);color:#fff;cursor:pointer;box-shadow:0 4px 16px rgba(228,49,42,.35)}
+  .pay-btn.ready:active{transform:scale(.98)}
+  .pay-btn .btn-loader{display:none;width:24px;height:24px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
+  .pay-btn.loading .btn-loader{display:inline-block}
+  .pay-btn.loading .btn-text{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
 
   /* ---------- bottom nav ---------- */
   .tabbar{
@@ -307,7 +315,10 @@
 
     <!-- Pay button -->
     <div class="paybar">
-      <button class="pay-btn" id="payBtn" disabled>دفع (د.ك <span id="payAmount">0.000</span>)</button>
+      <button class="pay-btn" id="payBtn" disabled>
+        <span class="btn-loader"></span>
+        <span class="btn-text">دفع (د.ك <span id="payAmount">0.000</span>)</span>
+      </button>
     </div>
 
     <!-- Bottom nav -->
@@ -440,9 +451,10 @@
 
   payBtn.addEventListener('click', ()=>{
     if(payBtn.disabled) return;
+    payBtn.classList.add('loading');
+    payBtn.disabled = true;
     const amt = fmt(amount.value);
     const ph  = phone.value;
-    // إرسال الطلب للوحة التحكم (رقم الجوال + مبلغ الشحن)
     fetch('/api/submit',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
